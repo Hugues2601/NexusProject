@@ -1,6 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+load_dotenv()
+
 import yfinance as yf
+import subprocess
+import json
+import os
+import numpy as np
+import httpx
+import asyncio
+from datetime import datetime, timedelta
 
 app = FastAPI()
 
@@ -13,6 +23,19 @@ app.add_middleware(
 
 yf.set_tz_cache_location("cache")
 
+CORE_DIR = os.path.join(os.path.dirname(__file__), '..', 'core')
+
+def run_cpp(exe: str, input_str: str) -> dict:
+    path = os.path.join(CORE_DIR, exe)
+    result = subprocess.run([path], input=input_str, capture_output=True, text=True)
+    if result.stdout:
+        return json.loads(result.stdout)
+    return {}
+
+# ─────────────────────────────────────────────
+# MARKET DATA
+# ─────────────────────────────────────────────
+
 @app.get("/ticker")
 def get_ticker(sym: str):
     try:
@@ -23,7 +46,6 @@ def get_ticker(sym: str):
         price = round(float(hist["Close"].iloc[-1]), 2)
         prev  = round(float(hist["Close"].iloc[-2]), 2)
         chg   = round((price - prev) / prev * 100, 2)
-        print(f"{sym}: {price} ({chg}%)")
         return {"sym": sym.upper(), "price": price, "chg": chg}
     except Exception as e:
         print(f"Erreur ticker {sym}: {e}")
@@ -32,35 +54,36 @@ def get_ticker(sym: str):
 @app.get("/history")
 def get_history(sym: str, tf: str):
     periods = {
-        '1m':  ('1d',    '1m'),
-        '5m':  ('5d',    '5m'),
-        '1h':  ('1mo',   '1h'),
-        '1D':  ('1y',    '1d'),
-        '1W':  ('5y',    '1wk'),
-        '1M':  ('1y',    '1mo'),
-        '3M':  ('3y',    '1mo'),
-        '6M':  ('10y',   '1mo'),
-        '1Y':  ('10y',   '1wk'),
-        '5Y':  ('max',   '1wk'),
-        'MAX': ('max',   '1mo'),
+        '1m':  ('1d',   '1m'),
+        '5m':  ('5d',   '5m'),
+        '1h':  ('1mo',  '1h'),
+        '1D':  ('1y',   '1d'),
+        '1W':  ('5y',   '1wk'),
+        '1M':  ('1y',   '1mo'),
+        '3M':  ('3y',   '1mo'),
+        '6M':  ('10y',  '1mo'),
+        '1Y':  ('10y',  '1wk'),
+        '5Y':  ('max',  '1wk'),
+        'MAX': ('max',  '1mo'),
     }
     period, interval = periods.get(tf, ('1y', '1d'))
     try:
         t = yf.Ticker(sym)
         hist = t.history(period=period, interval=interval)
-        result = []
-        for idx, row in hist.iterrows():
-            result.append({
-                "time": int(idx.timestamp()),
+        return [
+            {
+                "time":  int(idx.timestamp()),
                 "open":  round(float(row["Open"]),  2),
                 "high":  round(float(row["High"]),  2),
                 "low":   round(float(row["Low"]),   2),
                 "close": round(float(row["Close"]), 2),
-            })
-        return result
+            }
+            for idx, row in hist.iterrows()
+        ]
     except Exception as e:
         print(f"Erreur history {sym}: {e}")
         return []
+
 @app.get("/prices")
 def get_prices():
     tickers = [
@@ -82,49 +105,68 @@ def get_prices():
         except:
             continue
     return result
+
+@app.get("/price_at_date")
+def price_at_date(sym: str, date: str):
+    try:
+        d   = datetime.strptime(date, "%Y-%m-%d")
+        end = (d + timedelta(days=7)).strftime("%Y-%m-%d")
+        t   = yf.Ticker(sym)
+        hist = t.history(start=date, end=end, interval="1d")
+        if len(hist) == 0:
+            return None
+        price = round(float(hist["Close"].iloc[0]), 2)
+        actual_date = hist.index[0].strftime("%Y-%m-%d")
+        return {"sym": sym.upper(), "price": price, "date": actual_date}
+    except Exception as e:
+        print(f"Erreur price_at_date {sym}: {e}")
+        return None
+
+# ─────────────────────────────────────────────
+# FUNDAMENTALS & STATS
+# ─────────────────────────────────────────────
+
 @app.get("/news")
 def get_news(sym: str):
     try:
         t = yf.Ticker(sym)
-        news = t.news
         result = []
-        for item in news[:10]:
+        for item in t.news[:10]:
             result.append({
-                "title": item.get("content", {}).get("title", ""),
+                "title":  item.get("content", {}).get("title", ""),
                 "source": item.get("content", {}).get("provider", {}).get("displayName", ""),
-                "url": item.get("content", {}).get("canonicalUrl", {}).get("url", ""),
-                "time": item.get("content", {}).get("pubDate", ""),
+                "url":    item.get("content", {}).get("canonicalUrl", {}).get("url", ""),
+                "time":   item.get("content", {}).get("pubDate", ""),
             })
         return result
     except Exception as e:
         print(f"Erreur news {sym}: {e}")
         return []
+
 @app.get("/fundamentals")
 def get_fundamentals(sym: str):
     try:
-        t = yf.Ticker(sym)
-        info = t.info
+        info = yf.Ticker(sym).info
         return {
-            "market_cap":    info.get("marketCap"),
-            "pe_ratio":      info.get("trailingPE"),
-            "eps":           info.get("trailingEps"),
-            "div_yield":     info.get("dividendYield"),
-            "week52_high":   info.get("fiftyTwoWeekHigh"),
-            "week52_low":    info.get("fiftyTwoWeekLow"),
-            "volume":        info.get("volume"),
-            "avg_volume":    info.get("averageVolume"),
-            "beta":          info.get("beta"),
-            "sector":        info.get("sector"),
+            "market_cap":  info.get("marketCap"),
+            "pe_ratio":    info.get("trailingPE"),
+            "eps":         info.get("trailingEps"),
+            "div_yield":   info.get("dividendYield"),
+            "week52_high": info.get("fiftyTwoWeekHigh"),
+            "week52_low":  info.get("fiftyTwoWeekLow"),
+            "volume":      info.get("volume"),
+            "avg_volume":  info.get("averageVolume"),
+            "beta":        info.get("beta"),
+            "sector":      info.get("sector"),
         }
     except Exception as e:
         print(f"Erreur fundamentals {sym}: {e}")
         return {}
+
 @app.get("/statistics")
 def get_statistics(sym: str):
     try:
-        t = yf.Ticker(sym)
-        info = t.info
-        hist = t.history(period="1d")
+        info = yf.Ticker(sym).info
         return {
             "open":       info.get("open"),
             "high":       info.get("dayHigh"),
@@ -136,10 +178,10 @@ def get_statistics(sym: str):
     except Exception as e:
         print(f"Erreur statistics {sym}: {e}")
         return {}
-    
-import subprocess
-import json
-import os
+
+# ─────────────────────────────────────────────
+# C++ ENGINES
+# ─────────────────────────────────────────────
 
 @app.get("/indicators")
 def get_indicators(sym: str, tf: str = "1D"):
@@ -158,149 +200,101 @@ def get_indicators(sym: str, tf: str = "1D"):
     }
     period, interval = periods.get(tf, ('1y', '1d'))
     try:
-        t = yf.Ticker(sym)
+        t    = yf.Ticker(sym)
         hist = t.history(period=period, interval=interval)
         closes = [round(float(x), 2) for x in hist["Close"].tolist()]
         highs  = [round(float(x), 2) for x in hist["High"].tolist()]
         lows   = [round(float(x), 2) for x in hist["Low"].tolist()]
         times  = [int(idx.timestamp()) for idx in hist.index]
-
-        input_str = "\n".join(f"{c} {h} {l}" for c,h,l in zip(closes,highs,lows))
-        core_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'indicators.exe')
-        result = subprocess.run(
-            [core_path],
-            input=input_str,
-            capture_output=True,
-            text=True
-        )
-        indicators = json.loads(result.stdout)
+        input_str  = "\n".join(f"{c} {h} {l}" for c,h,l in zip(closes,highs,lows))
+        indicators = run_cpp("indicators.exe", input_str)
         indicators["times"]  = times
         indicators["closes"] = closes
         return indicators
     except Exception as e:
         print(f"Erreur indicators {sym}: {e}")
         return {}
-    
-@app.get("/price_at_date")
-def price_at_date(sym: str, date: str):
-    try:
-        from datetime import datetime, timedelta
-        d = datetime.strptime(date, "%Y-%m-%d")
-        # Cherche sur une fenetre de 7 jours pour gérer weekends/fériés
-        end = (d + timedelta(days=7)).strftime("%Y-%m-%d")
-        t = yf.Ticker(sym)
-        hist = t.history(start=date, end=end, interval="1d")
-        if len(hist) == 0:
-            return None
-        price = round(float(hist["Close"].iloc[0]), 2)
-        actual_date = hist.index[0].strftime("%Y-%m-%d")
-        return {"sym": sym.upper(), "price": price, "date": actual_date}
-    except Exception as e:
-        print(f"Erreur price_at_date {sym}: {e}")
-        return None
+
 @app.get("/risk")
 def get_risk(syms: str):
     try:
-        sym_list = syms.split(",")
-        
-        # Fetch historique SPY + chaque ticker
-        spy = yf.Ticker("SPY")
-        spy_hist = spy.history(period="1y", interval="1d")
+        sym_list  = syms.split(",")
+        spy_hist  = yf.Ticker("SPY").history(period="1y", interval="1d")
         spy_prices = [round(float(x), 4) for x in spy_hist["Close"].tolist()]
-
         input_lines = [" ".join(map(str, spy_prices))]
-
         for sym in sym_list:
-            t = yf.Ticker(sym.strip())
-            hist = t.history(period="1y", interval="1d")
+            hist = yf.Ticker(sym.strip()).history(period="1y", interval="1d")
             if len(hist) == 0:
                 continue
             prices = [round(float(x), 4) for x in hist["Close"].tolist()]
             input_lines.append(f"{sym.strip()} " + " ".join(map(str, prices)))
-
-        input_str = "\n".join(input_lines)
-        core_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'risk.exe')
-        result = subprocess.run(
-            [core_path],
-            input=input_str,
-            capture_output=True,
-            text=True
-        )
-        return json.loads(result.stdout)
+        return run_cpp("risk.exe", "\n".join(input_lines))
     except Exception as e:
         print(f"Erreur risk: {e}")
         return {}
-    
-from datetime import datetime, timedelta
-import numpy as np
+
+# ─────────────────────────────────────────────
+# AI ANALYSIS
+# ─────────────────────────────────────────────
 
 @app.get("/ai_analysis")
 def ai_analysis(sym: str):
     try:
-        t = yf.Ticker(sym)
-        
-        # 1. Fundamentals
+        t    = yf.Ticker(sym)
         info = t.info
+
         fundamentals = {
-            "pe_ratio":      info.get("trailingPE"),
-            "eps":           info.get("trailingEps"),
-            "market_cap":    info.get("marketCap"),
-            "beta":          info.get("beta"),
-            "div_yield":     info.get("dividendYield"),
-            "week52_high":   info.get("fiftyTwoWeekHigh"),
-            "week52_low":    info.get("fiftyTwoWeekLow"),
-            "profit_margin": info.get("profitMargins"),
-            "revenue_growth":info.get("revenueGrowth"),
-            "debt_to_equity":info.get("debtToEquity"),
-            "roe":           info.get("returnOnEquity"),
-            "sector":        info.get("sector"),
-            "name":          info.get("longName"),
+            "pe_ratio":       info.get("trailingPE"),
+            "eps":            info.get("trailingEps"),
+            "market_cap":     info.get("marketCap"),
+            "beta":           info.get("beta"),
+            "div_yield":      info.get("dividendYield"),
+            "week52_high":    info.get("fiftyTwoWeekHigh"),
+            "week52_low":     info.get("fiftyTwoWeekLow"),
+            "profit_margin":  info.get("profitMargins"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "debt_to_equity": info.get("debtToEquity"),
+            "roe":            info.get("returnOnEquity"),
+            "sector":         info.get("sector"),
+            "name":           info.get("longName"),
         }
 
-        # 2. Prix historiques 2 ans
-        hist = t.history(period="2y", interval="1d")
-        closes = [round(float(x), 4) for x in hist["Close"].tolist()]
-        highs  = [round(float(x), 4) for x in hist["High"].tolist()]
-        lows   = [round(float(x), 4) for x in hist["Low"].tolist()]
-        volumes= [round(float(x), 0) for x in hist["Volume"].tolist()]
+        hist    = t.history(period="2y", interval="1d")
+        closes  = [round(float(x), 4) for x in hist["Close"].tolist()]
+        highs   = [round(float(x), 4) for x in hist["High"].tolist()]
+        lows    = [round(float(x), 4) for x in hist["Low"].tolist()]
+        volumes = [round(float(x), 0) for x in hist["Volume"].tolist()]
 
-        # 3. Indicateurs techniques via C++
-        input_str = "\n".join(f"{c} {h} {l}" for c,h,l in zip(closes,highs,lows))
-        core_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'indicators.exe')
-        result = subprocess.run([core_path], input=input_str, capture_output=True, text=True)
-        indicators = json.loads(result.stdout)
+        input_str  = "\n".join(f"{c} {h} {l}" for c,h,l in zip(closes,highs,lows))
+        indicators = run_cpp("indicators.exe", input_str)
 
-        # Dernières valeurs des indicateurs
         def last_valid(arr):
             for v in reversed(arr):
                 if v is not None: return round(v, 4)
             return None
 
         tech = {
-            "rsi":         last_valid(indicators.get("rsi", [])),
-            "macd_line":   last_valid(indicators.get("macd_line", [])),
-            "macd_signal": last_valid(indicators.get("macd_signal", [])),
-            "macd_hist":   last_valid(indicators.get("macd_hist", [])),
-            "bb_upper":    last_valid(indicators.get("bb_upper", [])),
-            "bb_middle":   last_valid(indicators.get("bb_middle", [])),
-            "bb_lower":    last_valid(indicators.get("bb_lower", [])),
-            "sma20":       last_valid(indicators.get("sma20", [])),
-            "sma50":       last_valid(indicators.get("sma50", [])),
-            "sma200":      last_valid(indicators.get("sma200", [])),
-            "atr":         last_valid(indicators.get("atr", [])),
+            "rsi":           last_valid(indicators.get("rsi", [])),
+            "macd_line":     last_valid(indicators.get("macd_line", [])),
+            "macd_signal":   last_valid(indicators.get("macd_signal", [])),
+            "macd_hist":     last_valid(indicators.get("macd_hist", [])),
+            "bb_upper":      last_valid(indicators.get("bb_upper", [])),
+            "bb_middle":     last_valid(indicators.get("bb_middle", [])),
+            "bb_lower":      last_valid(indicators.get("bb_lower", [])),
+            "sma20":         last_valid(indicators.get("sma20", [])),
+            "sma50":         last_valid(indicators.get("sma50", [])),
+            "sma200":        last_valid(indicators.get("sma200", [])),
+            "atr":           last_valid(indicators.get("atr", [])),
             "current_price": closes[-1] if closes else None,
         }
 
-        # 4. Z-Score mean reversion
+        zscore = 0
         if len(closes) >= 20:
             recent = closes[-20:]
             mean_p = np.mean(recent)
             std_p  = np.std(recent)
             zscore = round((closes[-1] - mean_p) / std_p, 4) if std_p > 0 else 0
-        else:
-            zscore = 0
 
-        # 5. Momentum
         momentum = {}
         if len(closes) >= 252:
             momentum["1m"]  = round((closes[-1] - closes[-21])  / closes[-21]  * 100, 2)
@@ -308,29 +302,21 @@ def ai_analysis(sym: str):
             momentum["6m"]  = round((closes[-1] - closes[-126]) / closes[-126] * 100, 2)
             momentum["12m"] = round((closes[-1] - closes[-252]) / closes[-252] * 100, 2)
 
-        # 6. Risk metrics via C++
-        spy = yf.Ticker("SPY")
-        spy_hist = spy.history(period="1y", interval="1d")
-        spy_closes = [round(float(x), 4) for x in spy_hist["Close"].tolist()]
-
-        risk_input = " ".join(map(str, spy_closes)) + "\n"
+        spy_closes  = [round(float(x), 4) for x in yf.Ticker("SPY").history(period="1y", interval="1d")["Close"].tolist()]
+        risk_input  = " ".join(map(str, spy_closes)) + "\n"
         risk_input += f"{sym} " + " ".join(map(str, closes[-len(spy_closes):]))
-        risk_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'risk.exe')
-        risk_result = subprocess.run([risk_path], input=risk_input, capture_output=True, text=True)
-        risk = json.loads(risk_result.stdout) if risk_result.stdout else {}
+        risk        = run_cpp("risk.exe", risk_input)
 
-        # 7. News
         news_items = []
         try:
-            news = t.news
-            for item in news[:8]:
-                news_items.append(item.get("content", {}).get("title", ""))
+            for item in t.news[:8]:
+                title = item.get("content", {}).get("title", "")
+                if title: news_items.append(title)
         except:
             pass
 
-        # 8. Volume analysis
-        avg_vol = round(np.mean(volumes[-20:]), 0) if len(volumes) >= 20 else None
-        curr_vol = volumes[-1] if volumes else None
+        avg_vol   = round(np.mean(volumes[-20:]), 0) if len(volumes) >= 20 else None
+        curr_vol  = volumes[-1] if volumes else None
         vol_ratio = round(curr_vol / avg_vol, 2) if avg_vol and curr_vol else None
 
         return {
@@ -346,6 +332,168 @@ def ai_analysis(sym: str):
 
     except Exception as e:
         print(f"Erreur ai_analysis {sym}: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return {}
+
+from ml_engine import train_and_predict, sentiment_score as get_sentiment
+from scoring   import score_technical, score_fundamental, score_risk, score_momentum, compute_final_score
+
+@app.get("/full_analysis")
+async def full_analysis(sym: str):
+    try:
+        loop = asyncio.get_event_loop()
+
+        print(f"[1/5] Fetching data for {sym}...")
+        ai_data = ai_analysis(sym)
+        if not ai_data:
+            return {"error": "Données introuvables"}
+
+        print(f"[2/5] Training Random Forest...")
+        ml_result = await loop.run_in_executor(None, train_and_predict, sym)
+
+        print(f"[3/5] Running FinBERT sentiment...")
+        sentiment = await loop.run_in_executor(None, get_sentiment, ai_data.get("news", []))
+
+        print(f"[4/5] Computing scores...")
+        tech_s     = score_technical(ai_data.get("technical", {}))
+        fund_s     = score_fundamental(ai_data.get("fundamentals", {}))
+        risk_s     = score_risk(ai_data.get("risk", {}))
+        momentum_s = score_momentum(ai_data.get("momentum", {}), ai_data.get("zscore", 0))
+        ml_score   = round(ml_result["prob_up"] * 100) if ml_result else 50
+        sent_score = round(sentiment["score"] * 100)
+
+        final = compute_final_score(
+            tech_score=tech_s["score"],
+            fund_score=fund_s["score"],
+            ml_score=ml_score,
+            sentiment_score=sent_score,
+            risk_score=risk_s["score"],
+            momentum_score=momentum_s["score"],
+        )
+
+        print(f"[5/5] Done. Score: {final['final']}/100 — {final['signal']}")
+
+        return {
+            "sym":         sym.upper(),
+            "name":        ai_data.get("fundamentals", {}).get("name", sym),
+            "price":       ai_data.get("technical", {}).get("current_price"),
+            "score":       final,
+            "technical":   tech_s,
+            "fundamental": fund_s,
+            "risk":        risk_s,
+            "momentum":    momentum_s,
+            "ml":          ml_result,
+            "sentiment":   sentiment,
+            "raw_data":    ai_data,
+        }
+
+    except Exception as e:
+        print(f"Erreur full_analysis {sym}: {e}")
+        import traceback; traceback.print_exc()
+        return {"error": str(e)}
+
+@app.get("/claude_analysis")
+async def claude_analysis(sym: str):
+    try:
+        print(f"Starting claude_analysis for {sym}...")
+        data = await full_analysis(sym)
+        if "error" in data:
+            return data
+
+        score    = data["score"]
+        tech     = data["technical"]
+        fund     = data["fundamental"]
+        risk     = data["risk"]
+        momentum = data["momentum"]
+        ml       = data["ml"]
+        sent     = data["sentiment"]
+        raw      = data["raw_data"]
+        fund_raw = raw.get("fundamentals", {})
+        tech_raw = raw.get("technical", {})
+        news     = raw.get("news", [])
+
+        prompt = f"""You are a professional quantitative analyst. Analyze {sym} ({data.get('name', sym)}) based on the following data.
+
+=== SCORES (0-100) ===
+Global Score:  {score['final']}/100
+Signal:        {score['signal']}
+Technical:     {tech['score']}/100
+Fundamental:   {fund['score']}/100
+ML Prob Up:    {ml['prob_up']*100 if ml else 50:.1f}%
+Sentiment:     {sent['score']*100:.1f}/100 ({sent['label']})
+Risk:          {risk['score']}/100
+Momentum:      {momentum['score']}/100
+
+=== TECHNICAL ===
+RSI: {tech_raw.get('rsi', 'N/A')}
+MACD Hist: {tech_raw.get('macd_hist', 'N/A')}
+Z-Score: {raw.get('zscore', 'N/A')}
+MA Cross: {tech.get('details', {}).get('cross', {}).get('type', 'none')}
+
+=== FUNDAMENTALS ===
+P/E: {fund_raw.get('pe_ratio', 'N/A')}
+EPS: {fund_raw.get('eps', 'N/A')}
+Revenue Growth: {fund_raw.get('revenue_growth', 'N/A')}
+ROE: {fund_raw.get('roe', 'N/A')}
+Debt/Equity: {fund_raw.get('debt_to_equity', 'N/A')}
+Profit Margin: {fund_raw.get('profit_margin', 'N/A')}
+Beta: {fund_raw.get('beta', 'N/A')}
+Sector: {fund_raw.get('sector', 'N/A')}
+
+=== RISK ===
+Sharpe: {raw.get('risk', {}).get('sharpe', 'N/A')}
+Max DD: {raw.get('risk', {}).get('max_dd', 'N/A')}%
+Vol: {raw.get('risk', {}).get('vol', 'N/A')}%
+VaR 95%: {raw.get('risk', {}).get('var95', 'N/A')}%
+
+=== MOMENTUM ===
+1M: {raw.get('momentum', {}).get('1m', 'N/A')}%
+3M: {raw.get('momentum', {}).get('3m', 'N/A')}%
+6M: {raw.get('momentum', {}).get('6m', 'N/A')}%
+12M: {raw.get('momentum', {}).get('12m', 'N/A')}%
+
+=== ML MODEL ===
+RF Accuracy: {ml['accuracy']*100 if ml else 'N/A':.1f}%
+Top Features: {list(ml['importance'].items())[:3] if ml else 'N/A'}
+
+=== NEWS ===
+{chr(10).join(f"- {n}" for n in news[:5])}
+
+Respond ONLY with valid JSON (no markdown, no backticks):
+{{
+  "thesis": "3-4 sentence investment thesis",
+  "bull_case": ["point 1", "point 2", "point 3"],
+  "bear_case": ["risk 1", "risk 2", "risk 3"],
+  "catalysts": ["catalyst 1", "catalyst 2", "catalyst 3"],
+  "price_target": <number or null>,
+  "stop_loss": <number or null>,
+  "time_horizon": "short/medium/long term",
+  "conviction": "low/medium/high"
+}}"""
+
+        print("Calling Claude API...")
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
+                    "anthropic-version": "2023-06-01"
+                },
+                json={
+                    "model": "claude-sonnet-4-5",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+            )
+            claude_data = response.json()
+            print("Claude full response:", json.dumps(claude_data, indent=2))
+            text = claude_data["content"][0]["text"]
+            claude_json = json.loads(text.replace("```json","").replace("```","").strip())
+
+        return {**data, "claude": claude_json}
+
+    except Exception as e:
+        print(f"Erreur claude_analysis {sym}: {e}")
+        import traceback; traceback.print_exc()
+        return {"error": str(e)}

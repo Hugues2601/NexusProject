@@ -1,7 +1,6 @@
 import React from 'react';
 
-const tabs = ['TERMINAL', 'PORTFOLIO', 'DERIVATIVES', 'RISK', 'NEWS'];
-
+const tabs = ['TERMINAL', 'PORTFOLIO', 'DERIVATIVES', 'RISK', 'STRATEGIES', 'NEWS'];
 interface TopBarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;

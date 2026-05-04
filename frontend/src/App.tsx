@@ -8,11 +8,12 @@ import Chart from './Chart';
 import BottomPanels from './BottomPanels';
 import RightPanel from './RightPanel';
 import Portfolio from './Portfolio';
+import AIAdvisor from './AIAdvisor';
 
 function App() {
-  const [selectedTicker, setSelectedTicker] = useState('AAPL');
+  const [selectedTicker, setSelectedTicker]     = useState('AAPL');
   const [activeIndicators, setActiveIndicators] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState('TERMINAL');
+  const [activeTab, setActiveTab]               = useState('TERMINAL');
 
   const toggleIndicator = (key: string) => {
     setActiveIndicators(prev =>
@@ -36,7 +37,8 @@ function App() {
             <RightPanel activeIndicators={activeIndicators} onToggle={toggleIndicator} />
           </>
         )}
-        {activeTab === 'PORTFOLIO' && <Portfolio />}
+        {activeTab === 'PORTFOLIO'   && <Portfolio />}
+        {activeTab === 'STRATEGIES'  && <AIAdvisor />}
       </div>
     </div>
   );
