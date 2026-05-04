@@ -2,9 +2,12 @@ import React from 'react';
 
 const tabs = ['TERMINAL', 'PORTFOLIO', 'DERIVATIVES', 'RISK', 'NEWS'];
 
-function TopBar() {
-  const [active, setActive] = React.useState('TERMINAL');
+interface TopBarProps {
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+}
 
+function TopBar({ activeTab, onTabChange }: TopBarProps) {
   return (
     <div style={{
       background: '#0d0d14',
@@ -29,7 +32,7 @@ function TopBar() {
       {tabs.map(tab => (
         <div
           key={tab}
-          onClick={() => setActive(tab)}
+          onClick={() => onTabChange(tab)}
           style={{
             padding: '0 14px',
             height: '100%',
@@ -38,8 +41,8 @@ function TopBar() {
             fontSize: '11px',
             fontWeight: 500,
             cursor: 'pointer',
-            color: active === tab ? '#f0c040' : '#6b7280',
-            borderBottom: active === tab ? '2px solid #f0c040' : '2px solid transparent',
+            color: activeTab === tab ? '#f0c040' : '#6b7280',
+            borderBottom: activeTab === tab ? '2px solid #f0c040' : '2px solid transparent',
             letterSpacing: '0.5px'
           }}
         >

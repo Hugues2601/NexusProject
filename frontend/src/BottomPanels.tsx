@@ -20,6 +20,15 @@ interface Fundamentals {
   sector: string;
 }
 
+interface Statistics {
+  open: number;
+  high: number;
+  low: number;
+  prev_close: number;
+  avg_50: number;
+  avg_200: number;
+}
+
 interface BottomPanelsProps {
   ticker: string;
 }
@@ -33,32 +42,30 @@ function formatNumber(n: number): string {
 }
 
 function BottomPanels({ ticker }: BottomPanelsProps) {
-  const [news, setNews] = useState<NewsItem[]>([]);
+  const [news, setNews]               = useState<NewsItem[]>([]);
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
+  const [stats, setStats]             = useState<Statistics | null>(null);
 
-  const fetchNews = async () => {
+  const fetchAll = async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/news?sym=${ticker}`);
-      const data = await res.json();
-      if (Array.isArray(data)) setNews(data);
+      const [newsRes, fundRes, statsRes] = await Promise.all([
+        fetch(`http://127.0.0.1:8000/news?sym=${ticker}`),
+        fetch(`http://127.0.0.1:8000/fundamentals?sym=${ticker}`),
+        fetch(`http://127.0.0.1:8000/statistics?sym=${ticker}`),
+      ]);
+      const newsData  = await newsRes.json();
+      const fundData  = await fundRes.json();
+      const statsData = await statsRes.json();
+      if (Array.isArray(newsData)) setNews(newsData);
+      setFundamentals(fundData);
+      setStats(statsData);
     } catch (e) {
-      console.error('Erreur news:', e);
-    }
-  };
-
-  const fetchFundamentals = async () => {
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/fundamentals?sym=${ticker}`);
-      const data = await res.json();
-      setFundamentals(data);
-    } catch (e) {
-      console.error('Erreur fundamentals:', e);
+      console.error('Erreur fetch:', e);
     }
   };
 
   useEffect(() => {
-    fetchNews();
-    fetchFundamentals();
+    fetchAll();
   }, [ticker]);
 
   const formatTime = (iso: string) => {
@@ -69,45 +76,42 @@ function BottomPanels({ ticker }: BottomPanelsProps) {
     } catch { return '' }
   };
 
-  const fields = fundamentals ? [
-    { label: 'Market Cap',  val: formatNumber(fundamentals.market_cap) },
-    { label: 'P/E Ratio',   val: fundamentals.pe_ratio?.toFixed(2) ?? 'N/A' },
-    { label: 'EPS',         val: fundamentals.eps?.toFixed(2) ?? 'N/A' },
-    { label: 'Div Yield',   val: fundamentals.div_yield ? (fundamentals.div_yield * 100).toFixed(2) + '%' : 'N/A' },
-    { label: '52W High',    val: fundamentals.week52_high?.toFixed(2) ?? 'N/A' },
-    { label: '52W Low',     val: fundamentals.week52_low?.toFixed(2) ?? 'N/A' },
-    { label: 'Volume',      val: formatNumber(fundamentals.volume) },
-    { label: 'Avg Volume',  val: formatNumber(fundamentals.avg_volume) },
-    { label: 'Beta',        val: fundamentals.beta?.toFixed(2) ?? 'N/A' },
-    { label: 'Sector',      val: fundamentals.sector ?? 'N/A' },
+  const fundFields = fundamentals ? [
+    { label: 'Market Cap', val: formatNumber(fundamentals.market_cap) },
+    { label: 'P/E Ratio',  val: fundamentals.pe_ratio?.toFixed(2)  ?? 'N/A' },
+    { label: 'EPS',        val: fundamentals.eps?.toFixed(2)        ?? 'N/A' },
+    { label: 'Div Yield',  val: fundamentals.div_yield ? (fundamentals.div_yield * 100).toFixed(2) + '%' : 'N/A' },
+    { label: '52W High',   val: fundamentals.week52_high?.toFixed(2) ?? 'N/A' },
+    { label: '52W Low',    val: fundamentals.week52_low?.toFixed(2)  ?? 'N/A' },
+    { label: 'Volume',     val: formatNumber(fundamentals.volume) },
+    { label: 'Avg Volume', val: formatNumber(fundamentals.avg_volume) },
+    { label: 'Beta',       val: fundamentals.beta?.toFixed(2) ?? 'N/A' },
+    { label: 'Sector',     val: fundamentals.sector ?? 'N/A' },
   ] : [];
 
   return (
-    <div style={{
-      height: '200px',
-      display: 'flex',
-      borderTop: '1px solid #1e2028',
-      flexShrink: 0
-    }}>
+    <div style={{ height: '200px', display: 'flex', borderTop: '1px solid #1e2028', flexShrink: 0 }}>
 
-      {/* Greeks */}
+      {/* Price Statistics */}
       <div style={{ flex: 1, background: '#0d0d14', borderRight: '1px solid #1e2028', padding: '8px 12px' }}>
-        <div style={{ fontSize: '9px', fontWeight: 600, color: '#4a5060', letterSpacing: '1.5px', marginBottom: '8px' }}>GREEKS (ATM)</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-          {[
-            { name: 'Δ Delta', val: '0.5312', up: true  },
-            { name: 'Γ Gamma', val: '0.0241', up: false },
-            { name: 'Θ Theta', val: '-0.0821',up: false },
-            { name: 'ν Vega',  val: '0.1432', up: false },
-            { name: 'ρ Rho',   val: '0.0621', up: false },
-            { name: 'IV',      val: '24.3%',  up: false },
-          ].map(g => (
-            <div key={g.name} style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '10px', color: '#6b7280', fontFamily: 'JetBrains Mono, monospace' }}>{g.name}</span>
-              <span style={{ fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', color: g.up ? '#22c55e' : '#c8d0db' }}>{g.val}</span>
-            </div>
-          ))}
+        <div style={{ fontSize: '9px', fontWeight: 600, color: '#4a5060', letterSpacing: '1.5px', marginBottom: '8px' }}>
+          PRICE STATS — {ticker}
         </div>
+        {stats ? [
+          { label: 'Open',       val: stats.open?.toFixed(2)       ?? 'N/A' },
+          { label: 'High',       val: stats.high?.toFixed(2)       ?? 'N/A' },
+          { label: 'Low',        val: stats.low?.toFixed(2)        ?? 'N/A' },
+          { label: 'Prev Close', val: stats.prev_close?.toFixed(2) ?? 'N/A' },
+          { label: 'Avg 50D',    val: stats.avg_50?.toFixed(2)     ?? 'N/A' },
+          { label: 'Avg 200D',   val: stats.avg_200?.toFixed(2)    ?? 'N/A' },
+        ].map(f => (
+          <div key={f.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+            <span style={{ fontSize: '10px', color: '#6b7280', fontFamily: 'JetBrains Mono, monospace' }}>{f.label}</span>
+            <span style={{ fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', color: '#c8d0db' }}>{f.val}</span>
+          </div>
+        )) : (
+          <div style={{ fontSize: '10px', color: '#4a5060', fontFamily: 'JetBrains Mono, monospace' }}>Chargement...</div>
+        )}
       </div>
 
       {/* Fundamentals */}
@@ -115,10 +119,10 @@ function BottomPanels({ ticker }: BottomPanelsProps) {
         <div style={{ fontSize: '9px', fontWeight: 600, color: '#4a5060', letterSpacing: '1.5px', marginBottom: '8px' }}>
           FUNDAMENTALS — {ticker}
         </div>
-        {fields.length === 0 ? (
+        {fundFields.length === 0 ? (
           <div style={{ fontSize: '10px', color: '#4a5060', fontFamily: 'JetBrains Mono, monospace' }}>Chargement...</div>
         ) : (
-          fields.map(f => (
+          fundFields.map(f => (
             <div key={f.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
               <span style={{ fontSize: '10px', color: '#6b7280', fontFamily: 'JetBrains Mono, monospace' }}>{f.label}</span>
               <span style={{ fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', color: '#c8d0db' }}>{f.val}</span>
@@ -139,12 +143,7 @@ function BottomPanels({ ticker }: BottomPanelsProps) {
             <div
               key={i}
               onClick={() => n.url && window.open(n.url, '_blank')}
-              style={{
-                paddingBottom: '8px',
-                marginBottom: '8px',
-                borderBottom: '1px solid #13131a',
-                cursor: n.url ? 'pointer' : 'default',
-              }}
+              style={{ paddingBottom: '8px', marginBottom: '8px', borderBottom: '1px solid #13131a', cursor: n.url ? 'pointer' : 'default' }}
             >
               <div
                 style={{ fontSize: '11px', color: '#c8d0db', lineHeight: 1.4, marginBottom: '3px' }}
