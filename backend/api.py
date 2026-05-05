@@ -497,3 +497,258 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         print(f"Erreur claude_analysis {sym}: {e}")
         import traceback; traceback.print_exc()
         return {"error": str(e)}
+
+@app.get("/news_feed")
+async def news_feed():
+    try:
+        loop = asyncio.get_event_loop()
+        
+        tickers = {
+            "Tech":    ["AAPL","MSFT","NVDA","GOOGL","META"],
+            "Finance": ["JPM","GS","BAC","MS","V"],
+            "Macro":   ["SPY","QQQ","TLT","GLD","DXY"],
+            "Crypto":  ["BTC-USD","ETH-USD","SOL-USD"],
+        }
+
+        all_news = []
+        seen_titles = set()
+
+        for sector, syms in tickers.items():
+            for sym in syms:
+                try:
+                    t = yf.Ticker(sym)
+                    for item in t.news[:3]:
+                        title = item.get("content", {}).get("title", "")
+                        if not title or title in seen_titles:
+                            continue
+                        seen_titles.add(title)
+                        all_news.append({
+                            "title":   title,
+                            "source":  item.get("content", {}).get("provider", {}).get("displayName", ""),
+                            "url":     item.get("content", {}).get("canonicalUrl", {}).get("url", ""),
+                            "time":    item.get("content", {}).get("pubDate", ""),
+                            "sector":  sector,
+                            "ticker":  sym,
+                        })
+                except:
+                    continue
+
+        # Sentiment sur chaque news
+        sentiment = await loop.run_in_executor(
+            None,
+            get_sentiment,
+            [n["title"] for n in all_news[:20]]
+        )
+
+        for i, news in enumerate(all_news[:20]):
+            score = sentiment["details"][i] if i < len(sentiment["details"]) else 0
+            news["sentiment"] = "bullish" if score > 0.1 else "bearish" if score < -0.1 else "neutral"
+            news["sentiment_score"] = round(score, 3)
+
+        # Trie par date
+        all_news.sort(key=lambda x: x.get("time", ""), reverse=True)
+        return all_news
+
+    except Exception as e:
+        print(f"Erreur news_feed: {e}")
+        return []
+    
+@app.get("/yield_curve")
+def yield_curve():
+    try:
+        maturities = {
+            '1M': '^IRX', '3M': '^IRX', '6M': '^FVX',
+            '1Y': '^FVX', '2Y': '^FVX', '5Y': '^FVX',
+            '10Y': '^TNX', '30Y': '^TYX'
+        }
+        tickers_map = {
+            '3M': 'BIL', '6M': 'BIL',
+            '1Y': 'SHY', '2Y': 'SHY',
+            '5Y': 'IEF', '10Y': '^TNX', '30Y': '^TYX'
+        }
+        result = []
+        yields_data = {
+            '3M':  yf.Ticker('^IRX').history(period='1d')['Close'].iloc[-1] if len(yf.Ticker('^IRX').history(period='1d')) > 0 else 0,
+            '2Y':  yf.Ticker('^IRX').history(period='1d')['Close'].iloc[-1] if len(yf.Ticker('^IRX').history(period='1d')) > 0 else 0,
+            '5Y':  yf.Ticker('^FVX').history(period='1d')['Close'].iloc[-1] if len(yf.Ticker('^FVX').history(period='1d')) > 0 else 0,
+            '10Y': yf.Ticker('^TNX').history(period='1d')['Close'].iloc[-1] if len(yf.Ticker('^TNX').history(period='1d')) > 0 else 0,
+            '30Y': yf.Ticker('^TYX').history(period='1d')['Close'].iloc[-1] if len(yf.Ticker('^TYX').history(period='1d')) > 0 else 0,
+        }
+        for mat, yld in yields_data.items():
+            result.append({"maturity": mat, "yield": round(float(yld), 2)})
+        return result
+    except Exception as e:
+        print(f"Erreur yield_curve: {e}")
+        return []
+
+@app.get("/macro_dashboard")
+def macro_dashboard():
+    try:
+        vix = yf.Ticker('^VIX').history(period='1d')
+        dxy = yf.Ticker('DX-Y.NYB').history(period='1d')
+        tnx = yf.Ticker('^TNX').history(period='1d')
+        irx = yf.Ticker('^IRX').history(period='1d')
+
+        vix_val  = round(float(vix['Close'].iloc[-1]), 2)  if len(vix)  > 0 else 'N/A'
+        dxy_val  = round(float(dxy['Close'].iloc[-1]), 2)  if len(dxy)  > 0 else 'N/A'
+        tnx_val  = round(float(tnx['Close'].iloc[-1]), 2)  if len(tnx)  > 0 else 'N/A'
+        irx_val  = round(float(irx['Close'].iloc[-1]), 2)  if len(irx)  > 0 else 'N/A'
+        spread   = round(tnx_val - irx_val, 2) if isinstance(tnx_val, float) and isinstance(irx_val, float) else 'N/A'
+
+        return {
+            "fed_rate":       5.25,
+            "ecb_rate":       4.50,
+            "boe_rate":       5.25,
+            "boj_rate":       0.10,
+            "next_fomc":      "07 Mai",
+            "next_ecb":       "06 Jun",
+            "cpi_us":         3.2,
+            "core_cpi":       3.8,
+            "pce":            2.7,
+            "unemployment":   3.9,
+            "nfp":            "+275K Mar",
+            "sahm_rule":      "0.26%",
+            "vix":            vix_val,
+            "spread_10y_2y":  spread,
+            "dxy":            dxy_val,
+            "tnx":            tnx_val,
+        }
+    except Exception as e:
+        print(f"Erreur macro_dashboard: {e}")
+        return {}
+@app.get("/vix")
+def get_vix():
+    try:
+        vix = yf.Ticker('^VIX')
+        hist = vix.history(period="1y", interval="1d")
+        
+        closes = [round(float(x), 2) for x in hist["Close"].tolist()]
+        current = closes[-1]
+        high52w = round(max(closes), 2)
+        low52w  = round(min(closes), 2)
+        avg30d  = round(sum(closes[-30:]) / 30, 2)
+
+        if current < 15:
+            signal = "😌 Zone calme"
+        elif current < 20:
+            signal = "✅ Zone normale"
+        elif current < 30:
+            signal = "⚠️ Zone vigilance"
+        else:
+            signal = "🔴 Zone panique"
+
+        history = [
+            {"time": int(idx.timestamp()), "close": round(float(row["Close"]), 2)}
+            for idx, row in hist.iterrows()
+        ]
+
+        return {
+            "current":  current,
+            "high52w":  high52w,
+            "low52w":   low52w,
+            "avg30d":   avg30d,
+            "signal":   signal,
+            "history":  history,
+        }
+    except Exception as e:
+        print(f"Erreur vix: {e}")
+        return {}
+@app.get("/fear_greed")
+def fear_greed():
+    try:
+        # 1. Market Momentum — SPY vs SMA 125j
+        spy_hist = yf.Ticker("SPY").history(period="1y", interval="1d")
+        spy_closes = [float(x) for x in spy_hist["Close"].tolist()]
+        spy_current = spy_closes[-1]
+        sma125 = np.mean(spy_closes[-125:])
+        momentum_score = min(100, max(0, 50 + (spy_current - sma125) / sma125 * 500))
+
+        # 2. Market Volatility — VIX vs moyenne 50j
+        vix_hist = yf.Ticker("^VIX").history(period="1y", interval="1d")
+        vix_closes = [float(x) for x in vix_hist["Close"].tolist()]
+        vix_current = vix_closes[-1]
+        vix_avg50 = np.mean(vix_closes[-50:])
+        # VIX élevé = fear, VIX bas = greed
+        vol_score = min(100, max(0, 50 - (vix_current - vix_avg50) / vix_avg50 * 200))
+
+        # 3. Safe Haven Demand — SPY vs TLT (bonds)
+        tlt_hist = yf.Ticker("TLT").history(period="1mo", interval="1d")
+        tlt_closes = [float(x) for x in tlt_hist["Close"].tolist()]
+        spy_1m = (spy_closes[-1] - spy_closes[-21]) / spy_closes[-21] * 100
+        tlt_1m = (tlt_closes[-1] - tlt_closes[-21]) / tlt_closes[-21] * 100
+        # Actions > obligations = greed
+        safe_haven_score = min(100, max(0, 50 + (spy_1m - tlt_1m) * 3))
+
+        # 4. Junk Bond Demand — JNK vs LQD spread
+        jnk_hist = yf.Ticker("JNK").history(period="1mo", interval="1d")
+        lqd_hist = yf.Ticker("LQD").history(period="1mo", interval="1d")
+        jnk_closes = [float(x) for x in jnk_hist["Close"].tolist()]
+        lqd_closes = [float(x) for x in lqd_hist["Close"].tolist()]
+        jnk_perf = (jnk_closes[-1] - jnk_closes[-21]) / jnk_closes[-21] * 100
+        lqd_perf = (lqd_closes[-1] - lqd_closes[-21]) / lqd_closes[-21] * 100
+        junk_score = min(100, max(0, 50 + (jnk_perf - lqd_perf) * 5))
+
+        # 5. Put/Call Ratio — options SPY
+        try:
+            spy_ticker = yf.Ticker("SPY")
+            exp = spy_ticker.options[0]
+            chain = spy_ticker.option_chain(exp)
+            put_vol  = chain.puts["volume"].sum()
+            call_vol = chain.calls["volume"].sum()
+            pc_ratio = put_vol / call_vol if call_vol > 0 else 1
+            # PC ratio élevé = fear (beaucoup de puts)
+            pc_score = min(100, max(0, 50 - (pc_ratio - 1) * 50))
+        except:
+            pc_score = 50
+
+        # 6. Stock Strength — 52W Highs vs Lows via QQQ/IWM
+        qqq_hist = yf.Ticker("QQQ").history(period="1y", interval="1d")
+        qqq_closes = [float(x) for x in qqq_hist["Close"].tolist()]
+        qqq_52w_high = max(qqq_closes)
+        qqq_52w_low  = min(qqq_closes)
+        qqq_current  = qqq_closes[-1]
+        strength_score = min(100, max(0, (qqq_current - qqq_52w_low) / (qqq_52w_high - qqq_52w_low) * 100))
+
+        # 7. Market Breadth — SPY vs RSI calculé C++
+        input_str = "\n".join(f"{c} {c} {c}" for c in spy_closes)
+        core_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'indicators.exe')
+        result = subprocess.run([core_path], input=input_str, capture_output=True, text=True)
+        indicators = json.loads(result.stdout) if result.stdout else {}
+        rsi_vals = [v for v in indicators.get("rsi", []) if v is not None]
+        rsi_current = rsi_vals[-1] if rsi_vals else 50
+        breadth_score = rsi_current  # RSI SPY comme proxy breadth
+
+        # Score final
+        scores = {
+            "momentum":    round(momentum_score),
+            "volatility":  round(vol_score),
+            "safe_haven":  round(safe_haven_score),
+            "junk_bonds":  round(junk_score),
+            "put_call":    round(pc_score),
+            "strength":    round(strength_score),
+            "breadth":     round(breadth_score),
+        }
+
+        final = round(np.mean(list(scores.values())))
+
+        if final >= 75:
+            label = "Extreme Greed"
+        elif final >= 55:
+            label = "Greed"
+        elif final >= 45:
+            label = "Neutral"
+        elif final >= 25:
+            label = "Fear"
+        else:
+            label = "Extreme Fear"
+
+        return {
+            "value":  final,
+            "label":  label,
+            "scores": scores,
+        }
+
+    except Exception as e:
+        print(f"Erreur fear_greed: {e}")
+        import traceback; traceback.print_exc()
+        return {}
