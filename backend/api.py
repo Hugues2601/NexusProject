@@ -25,6 +25,18 @@ yf.set_tz_cache_location("cache")
 
 CORE_DIR = os.path.join(os.path.dirname(__file__), '..', 'core')
 
+from groq import Groq
+
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+
+def groq_complete(prompt: str, max_tokens: int = 500) -> str:
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content
+
 def run_cpp(exe: str, input_str: str) -> dict:
     path = os.path.join(CORE_DIR, exe)
     result = subprocess.run([path], input=input_str, capture_output=True, text=True)
@@ -87,21 +99,37 @@ def get_history(sym: str, tf: str):
 @app.get("/prices")
 def get_prices():
     tickers = [
-        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","JPM",
-        "V","XOM","PG","KO","SPY","QQQ","GLD",
-        "BTC-USD","ETH-USD","GC=F","CL=F","EURUSD=X"
+        {"sym": "AAPL",     "label": "Apple"},
+        {"sym": "MSFT",     "label": "Microsoft"},
+        {"sym": "NVDA",     "label": "Nvidia"},
+        {"sym": "AMZN",     "label": "Amazon"},
+        {"sym": "GOOGL",    "label": "Alphabet"},
+        {"sym": "META",     "label": "Meta"},
+        {"sym": "TSLA",     "label": "Tesla"},
+        {"sym": "JPM",      "label": "JPMorgan"},
+        {"sym": "V",        "label": "Visa"},
+        {"sym": "XOM",      "label": "ExxonMobil"},
+        {"sym": "PG",       "label": "Procter & Gamble"},
+        {"sym": "KO",       "label": "Coca-Cola"},
+        {"sym": "SPY",      "label": "S&P 500 ETF"},
+        {"sym": "QQQ",      "label": "Nasdaq ETF"},
+        {"sym": "GLD",      "label": "Gold ETF"},
+        {"sym": "BTC-USD",  "label": "Bitcoin"},
+        {"sym": "ETH-USD",  "label": "Ethereum"},
+        {"sym": "GC=F",     "label": "Gold Futures"},
+        {"sym": "CL=F",     "label": "WTI Oil"},
+        {"sym": "EURUSD=X", "label": "EUR/USD"},
     ]
     result = []
-    for sym in tickers:
+    for t in tickers:
         try:
-            t = yf.Ticker(sym)
-            hist = t.history(period="5d", interval="1d")
+            hist = yf.Ticker(t["sym"]).history(period="5d", interval="1d")
             if len(hist) >= 2:
                 price = round(float(hist["Close"].iloc[-1]), 2)
                 prev  = round(float(hist["Close"].iloc[-2]), 2)
                 chg   = round((price - prev) / prev * 100, 2)
-                clean = sym.replace("-USD","").replace("=F","").replace("=X","")
-                result.append({"sym": clean, "price": price, "chg": chg})
+                clean = t["sym"].replace("-USD","").replace("=F","").replace("=X","")
+                result.append({"sym": clean, "label": t["label"], "price": price, "chg": chg})
         except:
             continue
     return result
@@ -121,6 +149,25 @@ def price_at_date(sym: str, date: str):
     except Exception as e:
         print(f"Erreur price_at_date {sym}: {e}")
         return None
+
+@app.get("/search")
+def search(q: str):
+    try:
+        results = yf.Search(q, max_results=8)
+        quotes = results.quotes
+        output = []
+        for r in quotes:
+            output.append({
+                "sym":    r.get("symbol", ""),
+                "name":   r.get("longname") or r.get("shortname", ""),
+                "type":   r.get("quoteType", ""),
+                "sector": r.get("sector", ""),
+            })
+        return output
+    except Exception as e:
+        print(f"Erreur search: {e}")
+        return []
+
 
 # ─────────────────────────────────────────────
 # FUNDAMENTALS & STATS
@@ -750,5 +797,619 @@ def fear_greed():
 
     except Exception as e:
         print(f"Erreur fear_greed: {e}")
+        import traceback; traceback.print_exc()
+        return {}
+import httpx
+
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
+
+@app.get("/economic_calendar")
+async def economic_calendar():
+    try:
+        series = {
+            "CPI":          "CPIAUCSL",
+            "Core CPI":     "CPILFESL",
+            "PCE":          "PCEPI",
+            "Unemployment": "UNRATE",
+            "NFP":          "PAYEMS",
+            "GDP":          "GDP",
+            "Fed Funds":    "FEDFUNDS",
+            "Retail Sales": "RSAFS",
+            "Industrial":   "INDPRO",
+            "Housing":      "HOUST",
+        }
+
+        results = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            for name, series_id in series.items():
+                try:
+                    # Dernières observations
+                    obs_res = await client.get(
+                        "https://api.stlouisfed.org/fred/series/observations",
+                        params={
+                            "series_id":  series_id,
+                            "api_key":    FRED_API_KEY,
+                            "file_type":  "json",
+                            "sort_order": "desc",
+                            "limit":      2,
+                        }
+                    )
+                    obs_data = obs_res.json().get("observations", [])
+
+                    # Prochaine date de release
+                    release_res = await client.get(
+                        "https://api.stlouisfed.org/fred/series/release",
+                        params={
+                            "series_id": series_id,
+                            "api_key":   FRED_API_KEY,
+                            "file_type": "json",
+                        }
+                    )
+                    release_id = release_res.json().get("releases", [{}])[0].get("id")
+
+                    next_date = None
+                    if release_id:
+                        dates_res = await client.get(
+                            "https://api.stlouisfed.org/fred/release/dates",
+                            params={
+                                "release_id":              release_id,
+                                "api_key":                 FRED_API_KEY,
+                                "file_type":               "json",
+                                "include_release_dates_with_no_data": "true",
+                                "sort_order":              "asc",
+                                "realtime_start":          datetime.now().strftime("%Y-%m-%d"),
+                                "limit":                   1,
+                            }
+                        )
+                        dates = dates_res.json().get("release_dates", [])
+                        if dates:
+                            next_date = dates[0].get("date")
+
+                    if len(obs_data) >= 1:
+                        latest   = obs_data[0]
+                        previous = obs_data[1] if len(obs_data) > 1 else None
+                        curr_val = float(latest["value"]) if latest["value"] != "." else None
+                        prev_val = float(previous["value"]) if previous and previous["value"] != "." else None
+                        change   = round(curr_val - prev_val, 3) if curr_val and prev_val else None
+
+                        results.append({
+                            "name":        name,
+                            "series_id":   series_id,
+                            "value":       curr_val,
+                            "previous":    prev_val,
+                            "change":      change,
+                            "last_date":   latest["date"],
+                            "next_date":   next_date,
+                            "importance":  "High" if name in ["CPI", "NFP", "GDP", "Fed Funds", "Unemployment"] else "Medium",
+                        })
+                except Exception as e:
+                    print(f"Erreur FRED {name}: {e}")
+                    continue
+
+        results.sort(key=lambda x: 0 if x["importance"] == "High" else 1)
+        return results
+
+    except Exception as e:
+        print(f"Erreur economic_calendar: {e}")
+        return []
+    
+@app.get("/weekly_recap")
+async def weekly_recap():
+    try:
+        tickers = ["SPY", "QQQ", "AAPL", "NVDA", "MSFT", "TSLA", "BTC-USD", "GLD", "^VIX"]
+        perf = []
+        perf_data = []
+
+        for sym in tickers:
+            try:
+                hist = yf.Ticker(sym).history(period="5d", interval="1d")
+                if len(hist) >= 2:
+                    start = float(hist["Close"].iloc[0])
+                    end   = float(hist["Close"].iloc[-1])
+                    chg   = round((end - start) / start * 100, 2)
+                    clean = sym.replace("-USD","").replace("^","")
+                    perf.append(f"{clean}: {'+' if chg >= 0 else ''}{chg}%")
+                    perf_data.append({"sym": clean, "chg": chg})
+            except:
+                continue
+
+        # Fetch articles + contenu complet
+        all_articles = []
+        news_tickers = ["SPY", "AAPL", "NVDA", "MSFT", "TSLA", "BTC-USD", "JPM", "GLD"]
+
+        for sym in news_tickers:
+            try:
+                for item in yf.Ticker(sym).news[:2]:
+                    title = item.get("content", {}).get("title", "")
+                    url   = item.get("content", {}).get("canonicalUrl", {}).get("url", "")
+                    if not title:
+                        continue
+                    content = ""
+                    if url:
+                        try:
+                            from newspaper import Article as NewsArticle
+                            a = NewsArticle(url)
+                            a.download()
+                            a.parse()
+                            content = a.text[:600]
+                        except:
+                            pass
+                    all_articles.append({
+                        "title":   title,
+                        "content": content if content else title,
+                    })
+            except:
+                continue
+
+        # Déduplique
+        seen = set()
+        unique_articles = []
+        for a in all_articles:
+            if a["title"] not in seen:
+                seen.add(a["title"])
+                unique_articles.append(a)
+
+        articles_text = ""
+        for a in unique_articles[:10]:
+            articles_text += f"\n--- {a['title']} ---\n{a['content']}\n"
+
+        prompt = f"""You are a senior financial analyst writing a weekly market recap (Monday to Friday).
+
+Weekly performance data:
+{chr(10).join(perf)}
+
+Key articles and content from this week:
+{articles_text}
+
+Write a professional 3-paragraph weekly recap:
+1. Overall market performance with specific numbers from the data
+2. Key events and sector highlights based on the articles
+3. Macro themes and what to watch next week
+
+Be specific, use real numbers, professional tone."""
+
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, groq_complete, prompt, 700)
+        return {"recap": text, "performance": perf_data}
+
+    except Exception as e:
+        print(f"Erreur weekly_recap: {e}")
+        return {"recap": "Error loading weekly recap.", "performance": []}
+@app.get("/yesterday_digest")
+async def yesterday_digest():
+    try:
+        all_articles = []
+        news_tickers = ["SPY", "AAPL", "NVDA", "MSFT", "TSLA", "JPM", "BTC-USD", "GLD"]
+
+        for sym in news_tickers:
+            try:
+                for item in yf.Ticker(sym).news[:2]:
+                    title  = item.get("content", {}).get("title", "")
+                    url    = item.get("content", {}).get("canonicalUrl", {}).get("url", "")
+                    source = item.get("content", {}).get("provider", {}).get("displayName", "")
+                    if not title:
+                        continue
+                    content = ""
+                    if url:
+                        try:
+                            from newspaper import Article as NewsArticle
+                            a = NewsArticle(url)
+                            a.download()
+                            a.parse()
+                            content = a.text[:600]
+                        except:
+                            pass
+                    all_articles.append({
+                        "title":   title,
+                        "source":  source,
+                        "content": content if content else title,
+                    })
+            except:
+                continue
+
+        # Déduplique
+        seen = set()
+        unique_articles = []
+        for a in all_articles:
+            if a["title"] not in seen:
+                seen.add(a["title"])
+                unique_articles.append(a)
+
+        articles_text = ""
+        for a in unique_articles[:12]:
+            articles_text += f"\n--- [{a['source']}] {a['title']} ---\n{a['content']}\n"
+
+        prompt = f"""You are a financial analyst writing a morning briefing for traders.
+
+Yesterday's key articles:
+{articles_text}
+
+Write a concise morning digest (2-3 paragraphs):
+1. Key market moves and drivers from yesterday with specific details from the articles
+2. Notable company and macro news
+3. What traders should watch today
+
+Professional, specific, actionable. Use details from the actual article content."""
+
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, groq_complete, prompt, 600)
+        return {"digest": text}
+
+    except Exception as e:
+        print(f"Erreur yesterday_digest: {e}")
+        return {"digest": "Error loading digest."}
+
+
+@app.get("/summarize_article")
+async def summarize_article(title: str, url: str = ""):
+    try:
+        article_text = ""
+
+        # Fetch le vrai contenu si URL disponible
+        if url:
+            try:
+                from newspaper import Article
+                a = Article(url)
+                a.download()
+                a.parse()
+                article_text = a.text[:3000]
+            except:
+                pass
+
+        if article_text:
+            prompt = f"""You are a financial analyst. Summarize this article for a trader.
+
+Title: {title}
+
+Article content:
+{article_text}
+
+Provide:
+**Key takeaway** (1 sentence)
+**What happened** (2-3 sentences based on the actual content)
+**Market impact** — which assets/sectors are affected
+**Trading implications** — what traders should watch
+
+Be concise and specific."""
+        else:
+            prompt = f"""You are a financial analyst. Based on this headline, provide a brief analysis.
+
+Headline: {title}
+
+Provide:
+**Key takeaway** (1 sentence)
+**Context** (what this likely means for markets)
+**Market impact** — which assets/sectors are affected
+**Trading implications**
+
+Note: Analysis based on headline only."""
+
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, groq_complete, prompt, 500)
+        return {"summary": text, "has_content": bool(article_text)}
+
+    except Exception as e:
+        print(f"Erreur summarize_article: {e}")
+        return {"summary": "Error loading summary.", "has_content": False}
+
+@app.get("/fx_matrix")
+def fx_matrix():
+    try:
+        currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'CNY']
+        pairs = {
+            'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'USDJPY=X',
+            'USDCHF': 'USDCHF=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X',
+            'USDCNY': 'USDCNY=X', 'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X',
+            'EURCHF': 'EURCHF=X', 'EURAUD': 'EURAUD=X', 'EURCAD': 'EURCAD=X',
+            'GBPJPY': 'GBPJPY=X', 'GBPCHF': 'GBPCHF=X', 'GBPAUD': 'GBPAUD=X',
+            'AUDJPY': 'AUDJPY=X', 'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X',
+        }
+
+        rates = {}
+        changes = {}
+        for pair, sym in pairs.items():
+            try:
+                hist = yf.Ticker(sym).history(period="5d", interval="1d")
+                if len(hist) >= 2:
+                    rates[pair]   = round(float(hist["Close"].iloc[-1]), 4)
+                    prev          = float(hist["Close"].iloc[-2])
+                    changes[pair] = round((rates[pair] - prev) / prev * 100, 3)
+            except:
+                continue
+
+        return {
+            "currencies": currencies,
+            "rates":      rates,
+            "changes":    changes,
+        }
+    except Exception as e:
+        print(f"Erreur fx_matrix: {e}")
+        return {}
+    
+@app.get("/options_chain")
+def options_chain(sym: str, expiry: str = ""):
+    try:
+        t = yf.Ticker(sym)
+        
+        # Liste des expiries disponibles
+        exps = t.options
+        if not exps:
+            return {"error": "No options available"}
+        
+        # Prend la première expiry si pas spécifiée
+        target_exp = expiry if expiry in exps else exps[0]
+        
+        # Fetch la chain
+        chain = t.option_chain(target_exp)
+        spot  = round(float(t.fast_info.last_price), 2)
+        
+        def process_chain(df, option_type):
+            rows = []
+            for _, row in df.iterrows():
+                try:
+                    rows.append({
+                        "strike":         round(float(row["strike"]), 2),
+                        "bid":            round(float(row["bid"]), 2),
+                        "ask":            round(float(row["ask"]), 2),
+                        "last":           round(float(row["lastPrice"]), 2),
+                        "iv":             round(float(row["impliedVolatility"]) * 100, 2),
+                        "oi":             int(row["openInterest"]) if row["openInterest"] else 0,
+                        "volume":         int(row["volume"]) if row["volume"] else 0,
+                        "itm":            bool(row["inTheMoney"]),
+                        "type":           option_type,
+                    })
+                except:
+                    continue
+            return rows
+
+        calls = process_chain(chain.calls, "call")
+        puts  = process_chain(chain.puts,  "put")
+
+        return {
+            "sym":     sym.upper(),
+            "spot":    spot,
+            "expiry":  target_exp,
+            "expiries": list(exps),
+            "calls":   calls,
+            "puts":    puts,
+        }
+    except Exception as e:
+        print(f"Erreur options_chain {sym}: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/vol_surface")
+def vol_surface(sym: str):
+    try:
+        t    = yf.Ticker(sym)
+        spot = float(t.fast_info.last_price)
+        exps = t.options[:8]  # Max 8 expiries
+
+        surface_data = []
+
+        for exp in exps:
+            try:
+                chain = t.option_chain(exp)
+                
+                # Calcule jours jusqu'à expiry
+                exp_date = datetime.strptime(exp, "%Y-%m-%d")
+                days     = max((exp_date - datetime.now()).days, 1)
+
+                # Filtre autour du spot (70% à 130%)
+                calls = chain.calls
+                calls = calls[
+                    (calls["strike"] >= spot * 0.70) &
+                    (calls["strike"] <= spot * 1.30) &
+                    (calls["impliedVolatility"] > 0.01) &
+                    (calls["impliedVolatility"] < 5.0)
+                ]
+
+                for _, row in calls.iterrows():
+                    strike     = float(row["strike"])
+                    iv         = float(row["impliedVolatility"]) * 100
+                    moneyness  = round(strike / spot, 4)
+                    surface_data.append({
+                        "expiry":    exp,
+                        "days":      days,
+                        "strike":    round(strike, 2),
+                        "moneyness": moneyness,
+                        "iv":        round(iv, 2),
+                    })
+            except:
+                continue
+
+        return {
+            "sym":   sym.upper(),
+            "spot":  round(spot, 2),
+            "data":  surface_data,
+        }
+
+    except Exception as e:
+        print(f"Erreur vol_surface {sym}: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/options_expiries")
+def options_expiries(sym: str):
+    try:
+        t = yf.Ticker(sym)
+        return {"expiries": list(t.options)}
+    except Exception as e:
+        return {"expiries": []}
+
+
+@app.get("/greeks")
+def get_greeks(S: float, K: float, T: float, r: float, sigma: float):
+    try:
+        input_str = f"{S} {K} {T} {r} {sigma}"
+        core_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'greeks.exe')
+        result = subprocess.run(
+            [core_path],
+            input=input_str,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout:
+            return json.loads(result.stdout)
+        return {"error": "No output from C++ engine"}
+    except Exception as e:
+        print(f"Erreur greeks: {e}")
+        return {}
+    
+@app.get("/sector_heatmap")
+def sector_heatmap():
+    try:
+        sectors = {
+            "Technology":        "XLK",
+            "Healthcare":        "XLV",
+            "Financials":        "XLF",
+            "Consumer Disc.":    "XLY",
+            "Industrials":       "XLI",
+            "Communication":     "XLC",
+            "Consumer Staples":  "XLP",
+            "Energy":            "XLE",
+            "Utilities":         "XLU",
+            "Real Estate":       "XLRE",
+            "Materials":         "XLB",
+        }
+        result = []
+        for sector, sym in sectors.items():
+            try:
+                hist = yf.Ticker(sym).history(period="5d", interval="1d")
+                if len(hist) >= 2:
+                    price   = round(float(hist["Close"].iloc[-1]), 2)
+                    prev    = round(float(hist["Close"].iloc[-2]), 2)
+                    chg_1d  = round((price - prev) / prev * 100, 2)
+                    open_   = round(float(hist["Open"].iloc[0]), 2)
+                    chg_5d  = round((price - open_) / open_ * 100, 2)
+                    result.append({
+                        "sector": sector,
+                        "sym":    sym,
+                        "price":  price,
+                        "chg_1d": chg_1d,
+                        "chg_5d": chg_5d,
+                    })
+            except:
+                continue
+        return result
+    except Exception as e:
+        print(f"Erreur sector_heatmap: {e}")
+        return []
+
+
+@app.get("/world_markets")
+def world_markets():
+    try:
+        indices = {
+            "S&P 500":      "^GSPC",
+            "Nasdaq":       "^IXIC",
+            "Dow Jones":    "^DJI",
+            "Russell 2000": "^RUT",
+            "VIX":          "^VIX",
+            "DAX":          "^GDAXI",
+            "CAC 40":       "^FCHI",
+            "FTSE 100":     "^FTSE",
+            "Nikkei 225":   "^N225",
+            "Hang Seng":    "^HSI",
+            "Shanghai":     "000001.SS",
+            "ASX 200":      "^AXJO",
+            "Bovespa":      "^BVSP",
+            "TSX":          "^GSPTSE",
+            "Sensex":       "^BSESN",
+        }
+        result = []
+        for name, sym in indices.items():
+            try:
+                hist = yf.Ticker(sym).history(period="5d", interval="1d")
+                if len(hist) >= 2:
+                    price  = round(float(hist["Close"].iloc[-1]), 2)
+                    prev   = round(float(hist["Close"].iloc[-2]), 2)
+                    chg    = round((price - prev) / prev * 100, 2)
+                    result.append({
+                        "name":   name,
+                        "sym":    sym,
+                        "price":  price,
+                        "chg":    chg,
+                        "region": "Americas" if sym in ["^GSPC","^IXIC","^DJI","^RUT","^VIX","^BVSP","^GSPTSE"] else
+                                  "Europe"   if sym in ["^GDAXI","^FCHI","^FTSE"] else "Asia-Pacific",
+                    })
+            except:
+                continue
+        return result
+    except Exception as e:
+        print(f"Erreur world_markets: {e}")
+        return []
+
+
+@app.get("/recession_watch")
+async def recession_watch():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Sahm Rule
+            sahm_res = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={"series_id": "SAHMREALTIME", "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": 1}
+            )
+            sahm = sahm_res.json().get("observations", [{}])[0].get("value", "N/A")
+
+            # Unemployment
+            unemp_res = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={"series_id": "UNRATE", "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": 2}
+            )
+            unemp_obs = unemp_res.json().get("observations", [])
+            unemp     = float(unemp_obs[0]["value"]) if unemp_obs else None
+            unemp_prev= float(unemp_obs[1]["value"]) if len(unemp_obs) > 1 else None
+
+            # GDP Growth
+            gdp_res = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={"series_id": "A191RL1Q225SBEA", "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": 2}
+            )
+            gdp_obs = gdp_res.json().get("observations", [])
+            gdp     = float(gdp_obs[0]["value"]) if gdp_obs else None
+            gdp_prev= float(gdp_obs[1]["value"]) if len(gdp_obs) > 1 else None
+
+            # Leading Economic Index (Conference Board via FRED)
+            lei_res = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={"series_id": "USSLIND", "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": 2}
+            )
+            lei_obs = lei_res.json().get("observations", [])
+            lei     = float(lei_obs[0]["value"]) if lei_obs else None
+            lei_prev= float(lei_obs[1]["value"]) if len(lei_obs) > 1 else None
+
+            # Yield Curve 10Y-2Y
+            tnx = yf.Ticker("^TNX").history(period="1d")
+            irx = yf.Ticker("^IRX").history(period="1d")
+            tnx_val  = round(float(tnx["Close"].iloc[-1]), 2) if len(tnx) > 0 else None
+            irx_val  = round(float(irx["Close"].iloc[-1]), 2) if len(irx) > 0 else None
+            spread   = round(tnx_val - irx_val, 2) if tnx_val and irx_val else None
+
+            # Recession probability
+            sahm_float = float(sahm) if sahm != "N/A" else 0
+            recession_prob = min(100, max(0,
+                (sahm_float / 0.5 * 30) +
+                (max(0, -spread) / 2 * 30) +
+                (max(0, -gdp) / 4 * 20) +
+                (max(0, (lei_prev or 0) - (lei or 0)) / 2 * 20)
+            )) if gdp is not None else None
+
+            return {
+                "sahm_rule":       round(sahm_float, 2),
+                "sahm_threshold":  0.5,
+                "unemployment":    unemp,
+                "unemployment_prev": unemp_prev,
+                "gdp_growth":      gdp,
+                "gdp_prev":        gdp_prev,
+                "lei":             lei,
+                "lei_prev":        lei_prev,
+                "yield_spread":    spread,
+                "tnx":             tnx_val,
+                "irx":             irx_val,
+                "recession_prob":  round(recession_prob, 1) if recession_prob is not None else None,
+            }
+    except Exception as e:
+        print(f"Erreur recession_watch: {e}")
         import traceback; traceback.print_exc()
         return {}

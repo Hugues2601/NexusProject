@@ -86,18 +86,23 @@ function TickerBand() {
       }}>
         {items.map((t, i) => (
           <div key={i} style={{
-            display: 'inline-flex', alignItems: 'center', gap: '6px',
-            padding: '0 20px', borderRight: '1px solid #1e2028',
+            display: 'inline-flex', flexDirection: 'column', justifyContent: 'center',
+            padding: '0 20px', borderRight: '1px solid #1e2028', height: '28px',
           }}>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', fontWeight: 600, color: '#f0c040' }}>
-              {t.sym}
-            </span>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', color: '#e0e8f0' }}>
-              {t.price.toFixed(2)}
-            </span>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '10px', color: t.chg >= 0 ? '#22c55e' : '#ef4444' }}>
-              {t.chg >= 0 ? '▲' : '▼'}{Math.abs(t.chg)}%
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', fontWeight: 600, color: '#f0c040' }}>
+                {t.sym}
+              </span>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', color: '#e0e8f0' }}>
+                {t.price.toFixed(2)}
+              </span>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '10px', color: t.chg >= 0 ? '#22c55e' : '#ef4444' }}>
+                {t.chg >= 0 ? '▲' : '▼'}{Math.abs(t.chg)}%
+              </span>
+            </div>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '8px', color: '#4a5060' }}>
+              {(t as any).label ?? ''}
+            </div>
           </div>
         ))}
       </div>

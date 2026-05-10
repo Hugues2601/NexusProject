@@ -7,8 +7,11 @@ const AVAILABLE_WIDGETS = [
   { id: 'macro_dashboard', label: 'Macro Dashboard',   description: 'Taux, inflation, emploi' },
   { id: 'fear_greed',      label: 'Fear & Greed',      description: 'CNN Fear & Greed Index' },
   { id: 'vix',             label: 'VIX Chart',         description: 'Volatilité implicite S&P' },
-  { id: 'sector_heatmap',  label: 'Sector Heatmap',    description: 'Performance sectorielle' },
   { id: 'economic_cal',    label: 'Economic Calendar', description: 'NFP, CPI, FOMC...' },
+  { id: 'fx_matrix', label: 'FX Matrix', description: 'Live forex cross rates matrix' },
+  { id: 'sector_heatmap',  label: 'Sector Heatmap',  description: 'S&P 500 sector performance' },
+{ id: 'world_markets',   label: 'World Markets',   description: 'Global indices live'         },
+{ id: 'recession_watch', label: 'Recession Watch', description: 'Sahm Rule, GDP, yield curve' },
 ];
 
 interface TopBarProps {
