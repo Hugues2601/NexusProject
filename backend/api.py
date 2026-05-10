@@ -1413,3 +1413,275 @@ async def recession_watch():
         print(f"Erreur recession_watch: {e}")
         import traceback; traceback.print_exc()
         return {}
+    
+@app.get("/macro/central_banks")
+async def central_banks():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 24):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            fed_hist  = await fred("FEDFUNDS", 60)
+            ecb_hist  = await fred("ECBDFR",   60)
+            boj_hist  = await fred("IRSTCB01JPM156N", 60)
+            boe_hist  = await fred("BOERUKM", 60)
+
+            return {
+                "banks": [
+                    {
+                        "name": "Federal Reserve",
+                        "short": "FED",
+                        "rate": fed_hist[0][1] if fed_hist else None,
+                        "prev": fed_hist[1][1] if len(fed_hist) > 1 else None,
+                        "currency": "USD",
+                        "next_meeting": "07 May 2025",
+                        "bias": "Hawkish",
+                        "history": [{"date": d, "rate": r} for d, r in reversed(fed_hist[:24])],
+                    },
+                    {
+                        "name": "European Central Bank",
+                        "short": "ECB",
+                        "rate": ecb_hist[0][1] if ecb_hist else None,
+                        "prev": ecb_hist[1][1] if len(ecb_hist) > 1 else None,
+                        "currency": "EUR",
+                        "next_meeting": "06 Jun 2025",
+                        "bias": "Neutral",
+                        "history": [{"date": d, "rate": r} for d, r in reversed(ecb_hist[:24])],
+                    },
+                    {
+                        "name": "Bank of Japan",
+                        "short": "BOJ",
+                        "rate": boj_hist[0][1] if boj_hist else None,
+                        "prev": boj_hist[1][1] if len(boj_hist) > 1 else None,
+                        "currency": "JPY",
+                        "next_meeting": "31 May 2025",
+                        "bias": "Dovish",
+                        "history": [{"date": d, "rate": r} for d, r in reversed(boj_hist[:24])],
+                    },
+                    {
+                        "name": "Bank of England",
+                        "short": "BOE",
+                        "rate": boe_hist[0][1] if boe_hist else None,
+                        "prev": boe_hist[1][1] if len(boe_hist) > 1 else None,
+                        "currency": "GBP",
+                        "next_meeting": "08 May 2025",
+                        "bias": "Neutral",
+                        "history": [{"date": d, "rate": r} for d, r in reversed(boe_hist[:24])],
+                    },
+                ]
+            }
+    except Exception as e:
+        print(f"Erreur central_banks: {e}")
+        import traceback; traceback.print_exc()
+        return {}
+
+
+@app.get("/macro/inflation")
+async def macro_inflation():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 60):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            cpi       = await fred("CPIAUCSL")
+            core_cpi  = await fred("CPILFESL")
+            pce       = await fred("PCEPI")
+            core_pce  = await fred("PCEPILFE")
+            cpi_food  = await fred("CPIUFDSL")
+            cpi_energy= await fred("CPIENGSL")
+            cpi_shelter= await fred("CUSR0000SAH1")
+            cpi_services= await fred("CPISVNS")
+            hicp_eu   = await fred("CP0000EZ19M086NEST")
+
+            def latest(data): return data[0][1] if data else None
+            def prev(data):   return data[1][1] if len(data) > 1 else None
+            def chg(data):    return round(latest(data) - prev(data), 2) if latest(data) and prev(data) else None
+            def hist(data, n=36): return [{"date": d, "value": v} for d, v in reversed(data[:n])]
+
+            return {
+                "usa": {
+                    "cpi":          {"value": latest(cpi),        "prev": prev(cpi),        "change": chg(cpi),        "history": hist(cpi)},
+                    "core_cpi":     {"value": latest(core_cpi),   "prev": prev(core_cpi),   "change": chg(core_cpi),   "history": hist(core_cpi)},
+                    "pce":          {"value": latest(pce),         "prev": prev(pce),         "change": chg(pce),         "history": hist(pce)},
+                    "core_pce":     {"value": latest(core_pce),   "prev": prev(core_pce),   "change": chg(core_pce),   "history": hist(core_pce)},
+                    "food":         {"value": latest(cpi_food),   "prev": prev(cpi_food),   "change": chg(cpi_food)},
+                    "energy":       {"value": latest(cpi_energy), "prev": prev(cpi_energy), "change": chg(cpi_energy)},
+                    "shelter":      {"value": latest(cpi_shelter),"prev": prev(cpi_shelter),"change": chg(cpi_shelter)},
+                    "services":     {"value": latest(cpi_services),"prev": prev(cpi_services),"change": chg(cpi_services)},
+                },
+                "europe": {
+                    "hicp": {"value": latest(hicp_eu), "prev": prev(hicp_eu), "change": chg(hicp_eu), "history": hist(hicp_eu)},
+                },
+                "fed_target": 2.0,
+            }
+    except Exception as e:
+        print(f"Erreur macro_inflation: {e}")
+        return {}
+
+
+@app.get("/macro/labour")
+async def macro_labour():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 60):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            nfp          = await fred("PAYEMS")
+            unemp        = await fred("UNRATE")
+            jolts        = await fred("JTSJOL")
+            participation= await fred("CIVPART")
+            ahe          = await fred("CES0500000003")
+            sahm         = await fred("SAHMREALTIME")
+
+            def latest(d): return d[0][1] if d else None
+            def prev(d):   return d[1][1] if len(d) > 1 else None
+            def chg(d):    return round(latest(d) - prev(d), 2) if latest(d) and prev(d) else None
+            def hist(d, n=36): return [{"date": x, "value": v} for x, v in reversed(d[:n])]
+
+            # NFP change mensuel
+            nfp_change = round(latest(nfp) - prev(nfp), 0) if latest(nfp) and prev(nfp) else None
+
+            return {
+                "nfp":           {"value": latest(nfp),           "change": nfp_change,       "history": hist(nfp)},
+                "unemployment":  {"value": latest(unemp),          "prev": prev(unemp),         "change": chg(unemp),   "history": hist(unemp)},
+                "jolts":         {"value": latest(jolts),          "prev": prev(jolts),          "change": chg(jolts)},
+                "participation": {"value": latest(participation),  "prev": prev(participation),  "change": chg(participation)},
+                "ahe":           {"value": latest(ahe),            "prev": prev(ahe),            "change": chg(ahe)},
+                "sahm":          {"value": latest(sahm),           "triggered": (latest(sahm) or 0) >= 0.5},
+            }
+    except Exception as e:
+        print(f"Erreur macro_labour: {e}")
+        return {}
+
+
+@app.get("/macro/gdp")
+async def macro_gdp():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 20):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            gdp_us  = await fred("A191RL1Q225SBEA")  # US GDP QoQ annualized
+            gdp_eu  = await fred("CLVMEURSCAB1GQEA19") # Eurozone GDP
+            gdp_uk  = await fred("NGDPRSAXDCGBQ")    # UK GDP
+
+            def latest(d): return d[0][1] if d else None
+            def prev(d):   return d[1][1] if len(d) > 1 else None
+            def hist(d, n=12): return [{"date": x, "value": v} for x, v in reversed(d[:n])]
+
+            return {
+                "countries": [
+                    {"name": "United States", "code": "US",  "value": latest(gdp_us), "prev": prev(gdp_us), "unit": "% QoQ ann.", "history": hist(gdp_us)},
+                    {"name": "Eurozone",      "code": "EU",  "value": latest(gdp_eu), "prev": prev(gdp_eu), "unit": "Index",       "history": hist(gdp_eu)},
+                    {"name": "United Kingdom","code": "UK",  "value": latest(gdp_uk), "prev": prev(gdp_uk), "unit": "Bn GBP",      "history": hist(gdp_uk)},
+                ],
+            }
+    except Exception as e:
+        print(f"Erreur macro_gdp: {e}")
+        return {}
+
+
+@app.get("/macro/financial_conditions")
+async def financial_conditions():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 5):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            hy_spread  = await fred("BAMLH0A0HYM2")
+            ig_spread  = await fred("BAMLC0A0CM")
+            ted_spread = await fred("TEDRATE")
+
+        # Live market data
+        vix  = yf.Ticker("^VIX").history(period="1d")
+        dxy  = yf.Ticker("DX-Y.NYB").history(period="1d")
+        tnx  = yf.Ticker("^TNX").history(period="1d")
+
+        def latest(d): return d[0][1] if d else None
+        def prev(d):   return d[1][1] if len(d) > 1 else None
+
+        return {
+            "vix":        round(float(vix["Close"].iloc[-1]), 2)  if len(vix) > 0  else None,
+            "dxy":        round(float(dxy["Close"].iloc[-1]), 2)  if len(dxy) > 0  else None,
+            "tnx":        round(float(tnx["Close"].iloc[-1]), 2)  if len(tnx) > 0  else None,
+            "hy_spread":  {"value": latest(hy_spread),  "prev": prev(hy_spread),  "unit": "bp"},
+            "ig_spread":  {"value": latest(ig_spread),  "prev": prev(ig_spread),  "unit": "bp"},
+            "ted_spread": {"value": latest(ted_spread), "prev": prev(ted_spread), "unit": "bp"},
+        }
+    except Exception as e:
+        print(f"Erreur financial_conditions: {e}")
+        return {}
+
+
+@app.get("/macro/yield_curve_history")
+async def yield_curve_history():
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def fred(series_id: str, limit: int = 12):
+                res = await client.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": limit}
+                )
+                obs = res.json().get("observations", [])
+                return [(o["date"], float(o["value"])) for o in obs if o["value"] != "."]
+
+            series = {
+                "1M":  "DGS1MO",
+                "3M":  "DGS3MO",
+                "6M":  "DGS6MO",
+                "1Y":  "DGS1",
+                "2Y":  "DGS2",
+                "5Y":  "DGS5",
+                "10Y": "DGS10",
+                "30Y": "DGS30",
+            }
+
+            results = {}
+            for mat, sid in series.items():
+                data = await fred(sid, 2)
+                results[mat] = {
+                    "current": data[0][1] if data else None,
+                    "prev_month": data[1][1] if len(data) > 1 else None,
+                }
+
+            # Spread 2s10s
+            s2  = results.get("2Y",  {}).get("current")
+            s10 = results.get("10Y", {}).get("current")
+            s3m = results.get("3M",  {}).get("current")
+            spread_2s10s = round(s10 - s2,  2) if s10 and s2  else None
+            spread_3m10y = round(s10 - s3m, 2) if s10 and s3m else None
+
+            return {
+                "maturities": results,
+                "spread_2s10s": spread_2s10s,
+                "spread_3m10y": spread_3m10y,
+                "inverted": spread_2s10s < 0 if spread_2s10s is not None else None,
+            }
+    except Exception as e:
+        print(f"Erreur yield_curve_history: {e}")
+        return {}

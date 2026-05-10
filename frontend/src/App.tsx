@@ -10,17 +10,19 @@ import RightPanel from './RightPanel';
 import Portfolio from './Portfolio';
 import AIAdvisor from './AIAdvisor';
 import News from './News';
+import Derivatives from './Derivatives';
+import Landing from './Landing';
 import { WidgetManager } from './WidgetManager';
 import YieldCurveWidget from './widgets/YieldCurve';
-import MacroDashboard from './widgets/MacroDashboard';
-import FearGreed from './widgets/FearGreed';
-import VixChart from './widgets/VixChart';
+import MacroDashboard   from './widgets/MacroDashboard';
+import FearGreed        from './widgets/FearGreed';
+import VixChart         from './widgets/VixChart';
 import EconomicCalendar from './widgets/EconomicCalendar';
-import FXMatrix from './widgets/FXMatrix';
-import Derivatives from './Derivatives';
-import SectorHeatmap  from './widgets/SectorHeatmap';
-import WorldMarkets   from './widgets/WorldMarkets';
-import RecessionWatch from './widgets/RecessionWatch';
+import FXMatrix         from './widgets/FXMatrix';
+import SectorHeatmap    from './widgets/SectorHeatmap';
+import WorldMarkets     from './widgets/WorldMarkets';
+import RecessionWatch   from './widgets/RecessionWatch';
+import Macro from './Macro';
 
 interface WidgetInstance {
   id: string;
@@ -33,18 +35,19 @@ interface WidgetInstance {
 }
 
 const WIDGET_CONFIGS: Record<string, Omit<WidgetInstance, 'id'>> = {
-  yield_curve:     { title: 'YIELD CURVE',       component: <YieldCurveWidget />, width: 420, height: 280, x: 100, y: 100 },
-  macro_dashboard: { title: 'MACRO DASHBOARD',   component: <MacroDashboard />,   width: 320, height: 400, x: 200, y: 80  },
-  fear_greed: { title: 'FEAR & GREED INDEX', component: <FearGreed />, width: 380, height: 480, x: 200, y: 80 },
-  vix: { title: 'VIX', component: <VixChart />, width: 420, height: 360, x: 150, y: 100 },
-  economic_cal: { title: 'ECONOMIC CALENDAR', component: <EconomicCalendar />, width: 680, height: 400, x: 100, y: 80 },
-  fx_matrix: { title: 'FX MATRIX', component: <FXMatrix />, width: 820, height: 480, x: 100, y: 80 },
-  sector_heatmap:  { title: 'SECTOR HEATMAP',  component: <SectorHeatmap />,  width: 560, height: 480, x: 100, y: 80 },
-world_markets:   { title: 'WORLD MARKETS',   component: <WorldMarkets />,   width: 520, height: 480, x: 150, y: 80 },
-recession_watch: { title: 'RECESSION WATCH', component: <RecessionWatch />, width: 440, height: 560, x: 200, y: 80 },
+  yield_curve:     { title: 'YIELD CURVE',        component: <YieldCurveWidget />, width: 560, height: 380, x: 100, y: 100 },
+  macro_dashboard: { title: 'MACRO DASHBOARD',    component: <MacroDashboard />,   width: 420, height: 520, x: 200, y: 80  },
+  fear_greed:      { title: 'FEAR & GREED INDEX', component: <FearGreed />,        width: 460, height: 560, x: 200, y: 80  },
+  vix:             { title: 'VIX',                component: <VixChart />,         width: 560, height: 460, x: 150, y: 100 },
+  economic_cal:    { title: 'ECONOMIC CALENDAR',  component: <EconomicCalendar />, width: 860, height: 500, x: 100, y: 80  },
+  fx_matrix:       { title: 'FX MATRIX',          component: <FXMatrix />,         width: 820, height: 480, x: 100, y: 80  },
+  sector_heatmap:  { title: 'SECTOR HEATMAP',     component: <SectorHeatmap />,    width: 560, height: 480, x: 100, y: 80  },
+  world_markets:   { title: 'WORLD MARKETS',      component: <WorldMarkets />,     width: 520, height: 480, x: 150, y: 80  },
+  recession_watch: { title: 'RECESSION WATCH',    component: <RecessionWatch />,   width: 440, height: 560, x: 200, y: 80  },
 };
 
 function App() {
+  const [showLanding, setShowLanding]           = useState(true);
   const [selectedTicker, setSelectedTicker]     = useState('AAPL');
   const [activeIndicators, setActiveIndicators] = useState<string[]>([]);
   const [activeTab, setActiveTab]               = useState('TERMINAL');
@@ -67,13 +70,23 @@ function App() {
     setOpenWidgets(prev => prev.filter(w => w.id !== id));
   };
 
+  if (showLanding) {
+    return <Landing onEnter={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="terminal">
-      <TopBar activeTab={activeTab} onTabChange={setActiveTab} onOpenWidget={openWidget} />
+      <TopBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onOpenWidget={openWidget}
+        onHome={() => setShowLanding(true)}
+      />
       <MarketClock />
       <TickerBand />
       <div className="main">
-        <div style={{ display: activeTab === 'TERMINAL'   ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+
+        <div style={{ display: activeTab === 'TERMINAL'    ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <Watchlist selectedTicker={selectedTicker} onSelectTicker={setSelectedTicker} />
           <div className="center">
             <Chart ticker={selectedTicker} activeIndicators={activeIndicators} />
@@ -81,21 +94,29 @@ function App() {
           </div>
           <RightPanel activeIndicators={activeIndicators} onToggle={toggleIndicator} />
         </div>
-        <div style={{ display: activeTab === 'PORTFOLIO'  ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+
+        <div style={{ display: activeTab === 'PORTFOLIO'   ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <Portfolio />
         </div>
-        <div style={{ display: activeTab === 'STRATEGIES' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+
+        <div style={{ display: activeTab === 'STRATEGIES'  ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <AIAdvisor />
         </div>
-        <div style={{ display: activeTab === 'NEWS'       ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+
+        <div style={{ display: activeTab === 'NEWS'        ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <News />
         </div>
+
         <div style={{ display: activeTab === 'DERIVATIVES' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <Derivatives />
         </div>
+
+        <div style={{ display: activeTab === 'MACRO' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <Macro />
+        </div>
+
       </div>
 
-      {/* Floating widgets — rendus au dessus de tout */}
       <WidgetManager widgets={openWidgets} onClose={closeWidget} />
     </div>
   );
